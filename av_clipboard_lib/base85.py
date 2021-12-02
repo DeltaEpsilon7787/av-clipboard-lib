@@ -51,7 +51,6 @@ def decode_dwords_from_base85(data: str) -> bytes:
             (ord(datum) - 0x21) * key
             for key, datum in zip(_KEY, segment)
         )
-        print(dword, f'0x{dword:08X}')
         byte_array.write(STRUCT_DWORD_U.pack(dword))
 
     bytes_out = byte_array.getvalue()
