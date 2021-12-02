@@ -1,5 +1,7 @@
 from io import BytesIO, StringIO
 
+from .base_types import STRUCT_DWORD, STRUCT_DWORD_U
+
 _KEY = [0x55 ** 4, 0x55 ** 3, 0x55 ** 2, 0x55 ** 1, 0x55 ** 0]
 
 
@@ -9,23 +11,26 @@ def encode_dwords_to_base85(data: bytes) -> str:
     >>> encode_dwords_to_base85(bytes.fromhex("C9E8C919DC2C7E0E"))
     'alphagamma'
     """
-    segments = []
+    segments = BytesIO()
 
     padding = (4 - len(data) % 4) % 4
     data = BytesIO(data + b'\x00' * padding)
 
     for word_data in iter(lambda: data.read(4), b''):
-        dword = int.from_bytes(word_data, 'big')
+        dword, = STRUCT_DWORD_U.unpack(word_data)
 
-        segments.extend(
-            chr(0x21 + (dword // key) % 0x55)
-            for key in _KEY
+        segments.write(
+            bytes(
+                0x21 + (dword // key) % 0x55
+                for key in _KEY
+            )
         )
 
+    string_out = segments.getvalue().decode('ascii')
     if padding:
-        segments = segments[:-padding]
+        string_out = string_out[:-padding]
 
-    return ''.join(segments)
+    return compress_base85(string_out)
 
 
 def decode_dwords_from_base85(data: str) -> bytes:
@@ -34,7 +39,9 @@ def decode_dwords_from_base85(data: str) -> bytes:
     >>> decode_dwords_from_base85('alphagamma').hex().upper()
     'C9E8C919DC2C7E0E'
     """
-    byte_array = []
+    byte_array = BytesIO()
+
+    data = decompress_base85(data)
 
     padding = (5 - len(data) % 5) % 5
     data = StringIO(data + chr(0x21 + 0x55) * padding)
@@ -44,14 +51,28 @@ def decode_dwords_from_base85(data: str) -> bytes:
             (ord(datum) - 0x21) * key
             for key, datum in zip(_KEY, segment)
         )
-        byte_array.extend([
-            dword >> 24 & 0xFF,
-            dword >> 16 & 0xFF,
-            dword >> 8 & 0xFF,
-            dword >> 0 & 0xFF,
-        ])
+        print(dword, f'0x{dword:08X}')
+        byte_array.write(STRUCT_DWORD_U.pack(dword))
 
+    bytes_out = byte_array.getvalue()
     if padding:
-        byte_array = byte_array[:-padding]
+        bytes_out = bytes_out[:-padding]
 
-    return bytes(byte_array)
+    return bytes(bytes_out)
+
+
+def decompress_base85(data: str) -> str:
+    """Replace "z" with equivalent "!!!!!" in `data`."""
+
+    return data.replace('z', '!!!!!')
+
+
+def compress_base85(data: str) -> str:
+    """Replace null dwords to "z" character"""
+
+    data = StringIO(data)
+
+    return ''.join(
+        datum == '!!!!!' and 'z' or datum
+        for datum in iter(lambda: data.read(5), '')
+    )
