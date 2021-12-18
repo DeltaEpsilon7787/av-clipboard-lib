@@ -1,6 +1,6 @@
 from io import BytesIO, StringIO
 
-from .base_types import STRUCT_DWORD, STRUCT_DWORD_U
+from av_clipboard_lib.base_types import STRUCT_DWORD_U
 
 _KEY = [0x55 ** 4, 0x55 ** 3, 0x55 ** 2, 0x55 ** 1, 0x55 ** 0]
 

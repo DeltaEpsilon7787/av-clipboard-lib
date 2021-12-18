@@ -1,59 +1,36 @@
 from io import BytesIO
 from itertools import chain
-from struct import Struct
-from typing import ClassVar, Dict, Sequence, Type, Union
+from typing import Union
 
 from attr import attrs
 
-from .base_types import PositionValue, RowPosition, STRUCT_BYTE, STRUCT_CHAR, STRUCT_DOUBLE, STRUCT_DWORD, TimePosition
-from .varint import decode_next_varint, encode_varint
-
-NOTE_REGISTRY: Dict[int, Type[Union['InstantNote', 'LongNote']]] = {}
-STRUCTURE_REGISTRY: Dict[int, Type['StructureObject']] = {}
+from av_clipboard_lib.base_types import PositionValue, RowPosition, STRUCT_BYTE, STRUCT_CHAR, STRUCT_DOUBLE, \
+    STRUCT_DWORD, TimePosition
+from av_clipboard_lib.varint import decode_next_varint, encode_varint
 
 
 def _register_to(registry):
-    def _(cls):
-        registry[cls.KIND] = cls
-        return cls
+    def register(kind):
+        def _(cls):
+            registry[kind] = cls
+            registry[cls] = kind
+            return cls
 
-    return _
+        return _
 
+    return register
+
+
+NOTE_REGISTRY = {}
+STRUCTURE_REGISTRY = {}
 
 _register_note = _register_to(NOTE_REGISTRY)
 _register_structure = _register_to(STRUCTURE_REGISTRY)
 
 
 @attrs(auto_attribs=True)
-class AVObject:
-    KIND: ClassVar[int] = None
-
-    @property
-    def order_tuple(self):
-        return None
-
-
-@attrs(auto_attribs=True)
-class NoteObject(AVObject):
+class InstantNote:
     column: int
-
-    @staticmethod
-    def decode_next(stream: BytesIO, is_time: bool):
-        first_byte, = STRUCT_BYTE.unpack(stream.read(1))
-        first_position = is_time and TimePosition.decode_next(stream) or RowPosition.decode_next_as_varint(stream)
-
-        if not first_byte & 0x80:
-            return Tap(first_byte, first_position)
-
-        column = first_byte ^ 0x80
-        second_position = is_time and TimePosition.decode_next(stream) or RowPosition.decode_next_as_varint(stream)
-        kind, = STRUCT_BYTE.unpack(stream.read(1))
-
-        return NOTE_REGISTRY[kind].from_triplet(column, first_position, second_position)
-
-
-@attrs(auto_attribs=True)
-class InstantNote(NoteObject):
     position: PositionValue
 
     @classmethod
@@ -71,12 +48,13 @@ class InstantNote(NoteObject):
             STRUCT_BYTE.pack(self.column | 0x80),
             self.position.encoded_as_varint,
             self.position.encoded_as_varint,
-            STRUCT_BYTE.pack(self.KIND),
+            STRUCT_BYTE.pack(NOTE_REGISTRY[self.__class__]),
         ))
 
 
 @attrs(auto_attribs=True)
-class LongNote(NoteObject):
+class LongNote:
+    column: int
     start_position: PositionValue
     end_position: PositionValue
 
@@ -95,14 +73,12 @@ class LongNote(NoteObject):
             STRUCT_BYTE.pack(self.column | 0x80),
             self.start_position.encoded_as_varint,
             self.end_position.encoded_as_varint,
-            STRUCT_BYTE.pack(self.KIND),
+            STRUCT_BYTE.pack(NOTE_REGISTRY[self.__class__]),
         ))
 
 
-@_register_note
+@_register_note(None)
 class Tap(InstantNote):
-    KIND = None
-
     @property
     def encoded(self):
         return b''.join((
@@ -111,57 +87,36 @@ class Tap(InstantNote):
         ))
 
 
-@_register_note
-class Hold(LongNote):
-    KIND = 0x00
+@_register_note(0x00)
+class Hold(LongNote): pass
 
 
-@_register_note
-class Mine(InstantNote):
-    KIND = 0x01
+@_register_note(0x01)
+class Mine(InstantNote): pass
 
 
-@_register_note
-class Roll(LongNote):
-    KIND = 0x02
+@_register_note(0x02)
+class Roll(LongNote): pass
 
 
-@_register_note
-class Lift(InstantNote):
-    KIND = 0x03
+@_register_note(0x03)
+class Lift(InstantNote): pass
 
 
-@_register_note
-class Fake(InstantNote):
-    KIND = 0x04
+@_register_note(0x04)
+class Fake(InstantNote): pass
 
 
-@attrs(auto_attribs=True)
-class StructureObject(AVObject):
-    position: RowPosition
-
-    DATA_ORDER: ClassVar[Sequence[str]] = None
-    PACKERS: ClassVar[Sequence[Struct]] = None
-
-    @staticmethod
-    def decode_next(stream: BytesIO, kind: int):
-        target = STRUCTURE_REGISTRY[kind]
-
-        return target.decode(stream)
-
+def generate_structure_serializer_pair(order, packers):
     @classmethod
     def decode(cls, stream: BytesIO):
         row = RowPosition.decode_next_as_dword(stream)
         data = {
             name: packer.unpack(stream.read(packer.size))[0]
-            for name, packer in zip(cls.DATA_ORDER, cls.PACKERS)
+            for name, packer in zip(order, packers)
         }
 
         return cls(row, **data)
-
-    @property
-    def order_tuple(self):
-        return self.KIND, self.position
 
     @property
     def encoded(self):
@@ -169,83 +124,85 @@ class StructureObject(AVObject):
             self.position.encoded_as_dword,
             *(
                 packer.pack(getattr(self, name))
-                for name, packer in zip(self.DATA_ORDER, self.PACKERS)
+                for name, packer in zip(order, packers)
             )
         ))
 
+    return decode, encoded
+
 
 @attrs(auto_attribs=True)
-@_register_structure
-class BPM(StructureObject):
+@_register_structure(0x00)
+class BPM:
+    position: RowPosition
     bpm: float
-    KIND = 0x00
-    DATA_ORDER = ['bpm']
-    PACKERS = [STRUCT_DOUBLE]
+
+    decode, encoded = generate_structure_serializer_pair(['bpm'], [STRUCT_DOUBLE])
 
 
 @attrs(auto_attribs=True)
-@_register_structure
-class Stop(StructureObject):
+@_register_structure(0x01)
+class Stop:
+    position: RowPosition
     time: float
-    KIND = 0x01
-    DATA_ORDER = ['time']
-    PACKERS = [STRUCT_DOUBLE]
+
+    decode, encoded = generate_structure_serializer_pair(['time'], [STRUCT_DOUBLE])
 
 
 @attrs(auto_attribs=True)
-@_register_structure
-class Delay(StructureObject):
+@_register_structure(0x02)
+class Delay:
+    position: RowPosition
     time: float
-    KIND = 0x02
-    DATA_ORDER = ['time']
-    PACKERS = [STRUCT_DOUBLE]
+
+    decode, encoded = generate_structure_serializer_pair(['time'], [STRUCT_DOUBLE])
 
 
 @attrs(auto_attribs=True)
-@_register_structure
-class Warp(StructureObject):
+@_register_structure(0x03)
+class Warp:
+    position: RowPosition
     skipped_rows: int
-    KIND = 0x03
-    DATA_ORDER = ['skipped_rows']
-    PACKERS = [STRUCT_DWORD]
+
+    decode, encoded = generate_structure_serializer_pair(['skipped_rows'], [STRUCT_DWORD])
 
 
 @attrs(auto_attribs=True)
-@_register_structure
-class TimeSignature(StructureObject):
+@_register_structure(0x04)
+class TimeSignature:
+    position: RowPosition
     numerator: int
     denominator: int
-    KIND = 0x04
-    DATA_ORDER = ['numerator', 'denominator']
-    PACKERS = [STRUCT_DWORD] * 2
+
+    decode, encoded = generate_structure_serializer_pair(['numerator', 'denominator'], [STRUCT_DWORD] * 2)
 
 
 @attrs(auto_attribs=True)
-@_register_structure
-class Ticks(StructureObject):
+@_register_structure(0x05)
+class Ticks:
+    position: RowPosition
     ticks: int
-    KIND = 0x05
-    DATA_ORDER = ['ticks']
-    PACKERS = [STRUCT_DWORD]
+
+    decode, encoded = generate_structure_serializer_pair(['ticks'], [STRUCT_DWORD])
 
 
 @attrs(auto_attribs=True)
-@_register_structure
-class Combo(StructureObject):
+@_register_structure(0x06)
+class Combo:
+    position: RowPosition
     combo_mul: int
     miss_mul: int
-    KIND = 0x06
-    DATA_ORDER = ['combo_mul', 'miss_mul']
-    PACKERS = [STRUCT_DWORD] * 2
+
+    decode, encoded = generate_structure_serializer_pair(['combo_mul', 'miss_mul'], [STRUCT_DWORD] * 2)
 
 
 @attrs(auto_attribs=True)
-@_register_structure
-class Speed(StructureObject):
+@_register_structure(0x07)
+class Speed:
+    position: RowPosition
     ratio: float
     delay: float
     delay_is_time: bool
-    KIND = 0x07
 
     @classmethod
     def decode(cls, stream: BytesIO):
@@ -267,28 +224,28 @@ class Speed(StructureObject):
 
 
 @attrs(auto_attribs=True)
-@_register_structure
-class Scroll(StructureObject):
+@_register_structure(0x08)
+class Scroll:
+    position: RowPosition
     ratio: float
-    KIND = 0x08
-    DATA_ORDER = ['ratio']
-    PACKERS = [STRUCT_DOUBLE]
+
+    decode, encoded = generate_structure_serializer_pair(['ratio'], [STRUCT_DOUBLE])
 
 
 @attrs(auto_attribs=True)
-@_register_structure
-class FakeSegment(StructureObject):
+@_register_structure(0x09)
+class FakeSegment:
+    position: RowPosition
     fake_rows_amt: int
-    KIND = 0x09
-    DATA_ORDER = ['fake_rows_amt']
-    PACKERS = [STRUCT_DWORD]
+
+    decode, encoded = generate_structure_serializer_pair(['fake_rows_amt'], [STRUCT_DWORD])
 
 
 @attrs(auto_attribs=True)
-@_register_structure
-class Label(StructureObject):
+@_register_structure(0x0A)
+class Label:
+    position: RowPosition
     message: str
-    KIND = 0x0A
 
     @classmethod
     def decode(cls, stream: BytesIO):
@@ -310,3 +267,21 @@ class Label(StructureObject):
 
 NoteType = Union[Tap, Hold, Mine, Roll, Lift, Fake]
 StructureType = Union[BPM, Stop, Delay, Warp, TimeSignature, Ticks, Combo, Speed, Scroll, FakeSegment, Label]
+
+
+def decode_next_note(stream: BytesIO, is_time: bool) -> NoteType:
+    first_byte, = STRUCT_BYTE.unpack(stream.read(1))
+    first_position = is_time and TimePosition.decode_next(stream) or RowPosition.decode_next_as_varint(stream)
+
+    if not first_byte & 0x80:
+        return NOTE_REGISTRY[None](first_byte, first_position)
+
+    column = first_byte ^ 0x80
+    second_position = is_time and TimePosition.decode_next(stream) or RowPosition.decode_next_as_varint(stream)
+    kind, = STRUCT_BYTE.unpack(stream.read(1))
+
+    return NOTE_REGISTRY[kind].from_triplet(column, first_position, second_position)
+
+
+def decode_next_structure(stream: BytesIO, kind: int) -> StructureType:
+    return STRUCTURE_REGISTRY[kind].decode(stream)

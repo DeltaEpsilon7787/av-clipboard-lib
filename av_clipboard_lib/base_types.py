@@ -4,11 +4,11 @@ from typing import Union
 
 from attr import attrs
 
-from .varint import decode_next_varint, encode_varint
+from av_clipboard_lib.varint import decode_next_varint, encode_varint
 
-STRUCT_BYTE = Struct('B')
-STRUCT_CHAR = Struct('c')
-STRUCT_DOUBLE = Struct('d')
+STRUCT_BYTE = Struct('<B')
+STRUCT_CHAR = Struct('<c')
+STRUCT_DOUBLE = Struct('<d')
 STRUCT_DWORD = Struct('<I')
 STRUCT_DWORD_U = Struct('>I')
 
@@ -38,11 +38,11 @@ class RowPosition:
 
 @attrs(auto_attribs=True, eq=True, order=True)
 class TimePosition:
-    time: float
+    seconds: float
 
     @property
     def encoded(self):
-        return STRUCT_DOUBLE.pack(self.time)
+        return STRUCT_DOUBLE.pack(self.seconds)
 
     @classmethod
     def decode_next(cls, stream: BytesIO):

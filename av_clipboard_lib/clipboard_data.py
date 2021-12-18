@@ -5,10 +5,11 @@ from typing import List, Union
 
 from attr import attrs
 
-from .av_objects import NoteObject, NoteType, StructureObject, StructureType
-from .base85 import decode_dwords_from_base85, encode_dwords_to_base85
-from .base_types import STRUCT_BYTE
-from .varint import decode_next_varint, encode_varint
+from av_clipboard_lib.av_objects import NoteType, STRUCTURE_REGISTRY, StructureType, decode_next_note, \
+    decode_next_structure
+from av_clipboard_lib.base85 import decode_dwords_from_base85, encode_dwords_to_base85
+from av_clipboard_lib.base_types import STRUCT_BYTE
+from av_clipboard_lib.varint import decode_next_varint, encode_varint
 
 
 @attrs(auto_attribs=True)
@@ -20,7 +21,7 @@ class RowCopy:
         count = decode_next_varint(data)
 
         return cls([
-            NoteObject.decode_next(data, False)
+            decode_next_note(data, False)
             for _ in range(count)
         ])
 
@@ -49,7 +50,7 @@ class TimeCopy:
         count = decode_next_varint(data)
 
         return cls([
-            NoteObject.decode_next(data, True)
+            decode_next_note(data, True)
             for _ in range(count)
         ])
 
@@ -80,20 +81,20 @@ class StructureCopy:
         while count > 0:
             kind, = STRUCT_BYTE.unpack(data.read(1))
             for _ in range(count):
-                objects.append(StructureObject.decode_next(data, kind))
-            count, = STRUCT_BYTE.unpack(data.read(1))
+                objects.append(decode_next_structure(data, kind))
+            count = decode_next_varint(data)
         return cls(objects)
 
     @property
     def sorted_objects(self):
-        return sorted(self.objects, key=attrgetter('order_tuple'))
+        return sorted(self.objects, key=lambda x: (STRUCTURE_REGISTRY[x.__class__], x.position))
 
     @property
     def encoded(self):
         buffer = BytesIO()
 
         objects = self.sorted_objects
-        object_groups = groupby(objects, key=attrgetter('KIND'))
+        object_groups = groupby(objects, key=lambda x: STRUCTURE_REGISTRY[x.__class__])
 
         for kind, group_objects in object_groups:
             group_objects = [*group_objects]
