@@ -46,8 +46,8 @@ class InstantNote:
     def encoded(self):
         return b''.join((
             STRUCT_BYTE.pack(self.column | 0x80),
-            self.position.encoded_as_varint,
-            self.position.encoded_as_varint,
+            self.position.encoded,
+            self.position.encoded,
             STRUCT_BYTE.pack(NOTE_REGISTRY[self.__class__]),
         ))
 
@@ -71,8 +71,8 @@ class LongNote:
     def encoded(self):
         return b''.join((
             STRUCT_BYTE.pack(self.column | 0x80),
-            self.start_position.encoded_as_varint,
-            self.end_position.encoded_as_varint,
+            self.start_position.encoded,
+            self.end_position.encoded,
             STRUCT_BYTE.pack(NOTE_REGISTRY[self.__class__]),
         ))
 
